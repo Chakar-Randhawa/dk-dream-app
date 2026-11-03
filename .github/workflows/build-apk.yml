@@ -1,0 +1,168 @@
+name: Build Android APK
+
+# Runs on every push to main/master, and manually from the Actions tab ("Run workflow").
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    name: Release APK
+    # Pinned image (not "latest") so the toolchain never changes underneath you.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CI: "1"
+      EXPO_NO_TELEMETRY: "1"
+      EXPO_NO_DOTENV: "1"
+      GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.jvmargs=-Xmx4g"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Node 22 satisfies Expo SDK 58 / React Native 0.88 (^22.13).
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # JDK 17 is the version Gradle 9 + Android Gradle Plugin 9 expect.
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # "npm ci" is strict and fails if the lockfile was made by a different npm version.
+      # "npm install" uses the lockfile when it can and quietly fills in anything missing,
+      # so it never stops the build. .npmrc already sets legacy-peer-deps=true.
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund --legacy-peer-deps
+
+      # Generates the native android/ project from app.json (versions come from the installed SDK).
+      - name: Generate native Android project
+        run: npx expo prebuild --platform android --no-install --clean
+
+      # Lets Gradle download the exact SDK / build-tools / NDK this React Native version needs.
+      - name: Accept Android SDK licenses
+        run: yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('package-lock.json', 'app.json') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      # Release build, signed with the debug key so it installs on any phone.
+      - name: Build release APK
+        working-directory: android
+        run: ./gradlew assembleRelease --no-daemon --stacktrace -PreactNativeArchitectures=arm64-v8a,armeabi-v7a,x86_64
+
+      - name: Collect APK
+        run: |
+          set -e
+          APK="$(find android/app/build/outputs/apk/release -name '*.apk' | head -n 1)"
+          if [ -z "$APK" ]; then echo "No APK produced"; exit 1; fi
+          mkdir -p out
+          cp "$APK" out/DK-Dream-Kitchen.apk
+          ls -lh out
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: DK-Dream-Kitchen-apk
+          path: out/DK-Dream-Kitchen.apk
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # iOS: builds an UNSIGNED .ipa (no Apple Developer account needed to build it).
+  # To install it on an iPhone, sign it while installing with Sideloadly or AltStore
+  # using a free Apple ID (see README). Runs in parallel with the APK job.
+  # ---------------------------------------------------------------------------
+  ipa:
+    name: Unsigned IPA
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      CI: "1"
+      EXPO_NO_TELEMETRY: "1"
+      EXPO_NO_DOTENV: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # Use the newest Xcode installed on the runner (React Native 0.88 needs a recent one).
+      - name: Select newest Xcode
+        run: |
+          set -e
+          XCODE="$(ls -d /Applications/Xcode_*.app | sort -V | tail -n 1)"
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund --legacy-peer-deps
+
+      - name: Generate native iOS project
+        run: npx expo prebuild --platform ios --no-install --clean
+
+      - name: Install CocoaPods
+        working-directory: ios
+        run: pod install
+
+      - name: Build (no code signing)
+        run: |
+          set -eo pipefail
+          WORKSPACE="$(ls -d ios/*.xcworkspace | head -n 1)"
+          SCHEME="$(basename "$WORKSPACE" .xcworkspace)"
+          echo "Workspace: $WORKSPACE  Scheme: $SCHEME"
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package IPA
+        run: |
+          set -e
+          APP="$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -n 1)"
+          if [ -z "$APP" ]; then echo "No .app produced"; exit 1; fi
+          rm -rf ipa-work && mkdir -p ipa-work/Payload out
+          cp -R "$APP" ipa-work/Payload/
+          (cd ipa-work && zip -qry ../out/DK-Dream-Kitchen.ipa Payload)
+          ls -lh out
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: DK-Dream-Kitchen-ipa
+          path: out/DK-Dream-Kitchen.ipa
+          if-no-files-found: error
+          retention-days: 30
