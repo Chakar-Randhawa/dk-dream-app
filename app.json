@@ -1,0 +1,44 @@
+{
+  "expo": {
+    "name": "DK Dream Kitchen",
+    "slug": "dk-dream-kitchen",
+    "scheme": "dkdreamkitchen",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "backgroundColor": "#43952D",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "au.com.dkdreamkitchen.app"
+    },
+    "android": {
+      "package": "au.com.dkdreamkitchen.app",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "backgroundColor": "#43952D",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "bundler": "metro",
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#43952D",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 200
+        }
+      ],
+      ["expo-navigation-bar", { "enforceContrast": false }]
+    ]
+  }
+}
